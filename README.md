@@ -1,99 +1,183 @@
-# grok-cli-termux-native
+# grok en Termux
 
-Run **xAI's Grok Build CLI (`grok`) natively on Termux** (Android · aarch64) — **no proot, no reboot** (and **no root** required).
+**English:** This fork runs xAI's Grok Build CLI (`grok`) natively on Termux (Android aarch64, no root). One 16-byte path change makes DNS read `/sdcard/.grokdns` instead of `/etc/resolv.conf`. Original project by [Ryan Wylie (Thr45hx)](https://github.com/Thr45hx/grok-cli-termux-native). [MIT](./LICENSE) license. The guide below is in Spanish.
 
-Grok Build ships a **statically-linked musl** aarch64 binary — no interpreter, no glibc — so it runs directly on the kernel and bundles its own TLS roots. It boots native on Termux out of the box. The **only** thing that fails is DNS: musl reads `/etc/resolv.conf`, which can't exist on stock Termux (`/etc → /system/etc`, read-only), and a *static* binary ignores `LD_PRELOAD` so a preload shim can't help either.
+Guía corta para instalar el comando `grok` en el móvil, sin root. El proyecto original es de Ryan Wylie ([Thr45hx/grok-cli-termux-native](https://github.com/Thr45hx/grok-cli-termux-native)), licencia [MIT](./LICENSE). Esto es un fork: [NickPro5677/grok-cli-termux-native](https://github.com/NickPro5677/grok-cli-termux-native). No está afiliado con xAI.
 
-## Demo — Grok explaining its own install
+Si algo falla, mira [docs/PROBLEMAS.md](docs/PROBLEMAS.md). Lo que este fork cambia está en [docs/CAMBIOS-FORK.md](docs/CAMBIOS-FORK.md).
 
-Asked how it's running, Grok inspects its own launcher + binary on-device (Android 17, Pixel 9 Pro XL) and explains why a static musl ELF just runs — the kernel's `binfmt_elf` loader maps it directly, no dynamic linker, no proot, no qemu:
+## Qué es
 
-![Grok explains its native install](screenshots/grok-explains-native.png)
+Grok Build es el programa de terminal de xAI. El comando se llama `grok`.
 
-## The fix: one 16-byte patch (no root)
+En Termux (la app de terminal para Android) ese programa ya puede abrirse tal cual: viene preparado para el procesador del móvil. Funciona en un Termux normal, con tu usuario, sin cuenta de administrador (root) y sin montar otro Linux dentro (proot).
 
-There is exactly **one** hardcoded `/etc/resolv.conf` string in the binary. `/sdcard/.grokdns` is also exactly 16 bytes, so we swap them **in place** — no length change, no relocation — and drop a resolv file there:
+Solo falla el DNS, el paso que convierte un nombre (`x.ai`) en una dirección. El programa busca un archivo del sistema, `/etc/resolv.conf`, y en Termux esa ruta no se puede crear. El instalador apunta esa búsqueda a `/sdcard/.grokdns`, un archivo que sí puedes escribir. Más abajo está la explicación corta.
 
-```
-/etc/resolv.conf   →   /sdcard/.grokdns      (nameserver 8.8.8.8 / 8.8.4.4)
-```
+![Grok ya instalado, explicando por qué corre nativo en Termux](screenshots/grok-explains-native.png)
 
-Now musl resolves DNS from a file Termux *can* write, with **zero root and zero proot**. (`/sdcard` is the only short, app-readable path that fits in 16 bytes.)
+## Requisitos
 
-> HTTPS already works — Grok bundles its CA roots. Only DNS needed fixing.
+- **Termux de [F-Droid](https://f-droid.org/packages/com.termux/).** Instala esa app. La copia de la Play Store lleva años sin actualizarse y sus paquetes no sirven.
+- **Móvil aarch64** (arm64, el procesador de casi todos los teléfonos actuales). En Termux:
 
-### Rooted? The launcher uses the cleaner path automatically
+  ```bash
+  uname -m
+  ```
 
-If you're rooted (Magisk/APatch), a systemless module can supply a real `/etc/resolv.conf` (since `/etc → /system/etc`). When the launcher sees one, it **keeps the binary pristine** and lets musl resolve natively — **no byte-patch at all**. No-root and rooted are the same install; `grok-dns.py` swaps the path either direction and only writes on a real change, so it self-corrects if you move between setups or a self-update resets the string.
+  Tiene que salir `aarch64`.
+- **Permiso de almacenamiento.** El DNS se guarda en `/sdcard/.grokdns`. En Termux:
 
-## Requirements
+  ```bash
+  termux-setup-storage
+  ```
 
-- Termux on **aarch64 / arm64**, with storage access (`termux-setup-storage`)
-- Internet on first run
+  Pulsa **Permitir**. Sin ese permiso la instalación no puede dejar el archivo de DNS.
+- **Internet** la primera vez: hay que descargar el programa.
 
-## Install
+## Instalación
+
+Hazlo en Termux, desde este fork. Son cuatro pasos: permiso, descargar, leer, ejecutar.
+
+1. Permiso de almacenamiento (si aún no lo diste):
+
+   ```bash
+   termux-setup-storage
+   ```
+
+2. Carpeta de trabajo y los archivos de **este** repositorio:
+
+   ```bash
+   pkg update && pkg install -y curl
+   mkdir -p ~/grok-termux
+   cd ~/grok-termux
+   curl -fsSL -o install.sh https://raw.githubusercontent.com/NickPro5677/grok-cli-termux-native/main/install.sh
+   curl -fsSL -o launcher.sh https://raw.githubusercontent.com/NickPro5677/grok-cli-termux-native/main/launcher.sh
+   curl -fsSL -o grok-dns.py https://raw.githubusercontent.com/NickPro5677/grok-cli-termux-native/main/grok-dns.py
+   ```
+
+   `launcher.sh` y `grok-dns.py` tienen que estar en la misma carpeta que `install.sh`. El instalador usa esos dos archivos de al lado. Si no los encuentra, los baja del proyecto original (Thr45hx), y entonces no estás instalando este fork.
+
+   Si `pkg` o `curl` muestran un error, para aquí y mira [docs/PROBLEMAS.md](docs/PROBLEMAS.md). Con un error de descarga, no ejecutes el script: espera y vuelve a bajarlo.
+
+3. Lee `install.sh` entero antes de ejecutarlo. Puedes subir y bajar en la pantalla de Termux:
+
+   ```bash
+   cat install.sh
+   ```
+
+   Ahí se ve qué paquetes instala, de dónde baja `grok` y qué escribe (`~/agents/grok`, `~/.grok` y `/sdcard/.grokdns`).
+
+4. Cuando el texto te cuadre:
+
+   ```bash
+   bash install.sh
+   ```
+
+Al terminar puedes escribir `grok` en cualquier carpeta de Termux.
+
+### Por qué no usar `curl | bash`
+
+Este atajo es habitual y es mejor evitarlo:
 
 ```bash
-git clone https://github.com/Thr45hx/grok-cli-termux-native
-cd grok-cli-termux-native
-bash install.sh
+curl -fsSL https://ejemplo/install.sh | bash
 ```
 
-or one-shot:
+La tubería (`|`) manda el archivo al intérprete **mientras llega**. No hay un momento para leerlo. Si la descarga se corta a la mitad, si la dirección no es la que crees, o si el archivo cambia entre que lo miras en el navegador y lo ejecutas, el teléfono corre un script que no revisaste. Puede instalar paquetes, escribir en el almacenamiento y bajar un programa.
+
+Guardar el archivo, leerlo con `cat` y luego lanzarlo con `bash install.sh` separa esas dos cosas: primero ves el texto, después decides.
+
+## Primer uso e inicio de sesión
+
+Abre el programa:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Thr45hx/grok-cli-termux-native/main/install.sh | bash
+grok
 ```
 
-Then authenticate and go:
+La primera vez pide **Sign in with Grok**. Se abre el navegador del teléfono, entras en tu cuenta y vuelves a Termux.
+
+Si prefieres una clave de API (empieza por `xai-`, se crea en la consola de xAI, [console.x.ai](https://console.x.ai)):
 
 ```bash
-export XAI_API_KEY=xai-...        # or just run `grok` for the browser "Sign in with Grok" flow
-grok -p "hello from native Termux"
+export XAI_API_KEY="tu-clave"
+grok -p "hola desde Termux"
 ```
 
-## Updates just work (Ctrl+U)
+La clave solo vive en esa sesión de Termux. No la pegues en un archivo que vayas a subir a internet ni se la pases a nadie.
 
-Grok's own updater (Ctrl+U, or `grok update`) downloads the new binary to `~/.grok/downloads/` and marks it current by repointing `~/.grok/bin/grok` at it — but it **never** touches the `versions/` store that a wrapper launcher runs from. On a naive setup that means the update downloads but never applies: you restart and you're still on the old version.
+## Actualizar
 
-This launcher closes that gap. On each start it resolves `~/.grok/bin/grok`, reads the version from the filename, and **promotes** it into `~/.grok/versions/` + repoints `.verified`. So after Ctrl+U, just restart grok once and you're on the new build.
-
-It also re-applies the DNS fix per version (a fresh download restores the original `/etc/resolv.conf` string) and re-seeds `/sdcard/.grokdns` if it goes missing.
-
-## Layout
-
-```
-~/.grok/versions/<ver>          # grok binary (pristine, or byte-patched for no-root)
-~/.grok/bin/grok                # grok's own "current" symlink (the launcher adopts it)
-~/agents/grok/
-├── launcher.sh                 # ← $PREFIX/bin/grok symlinks here
-└── grok-dns.py                 # bidirectional 16-byte DNS-path swap (native ⇄ sdcard)
-/sdcard/.grokdns                # nameserver 8.8.8.8 / 8.8.4.4 (no-root mode only)
-```
-
-## Uninstall
+Dentro de grok, `Ctrl+U`. Desde la terminal:
 
 ```bash
+grok update
+```
+
+La actualización baja un binario nuevo. Ese archivo vuelve a traer la ruta original `/etc/resolv.conf`. Ciérralo y ábrelo otra vez con `grok`. El lanzador (`~/agents/grok/launcher.sh`) adopta la versión nueva y **vuelve a aplicar el cambio de 16 bytes**. Si `/sdcard/.grokdns` desapareció, también lo crea de nuevo.
+
+## Desinstalar
+
+En la misma carpeta (o en una nueva), baja el script, léelo y ejecútalo:
+
+```bash
+cd ~/grok-termux
+curl -fsSL -o uninstall.sh https://raw.githubusercontent.com/NickPro5677/grok-cli-termux-native/main/uninstall.sh
+cat uninstall.sh
 bash uninstall.sh
 ```
 
-## Part of the native-Termux CLI family
+Quita el comando `grok`, la carpeta `~/agents/grok`, las versiones en `~/.grok/versions` y el archivo `/sdcard/.grokdns`.
 
-One-command **native, no-proot** installers for AI coding CLIs on Termux — same toolkit, one per agent:
+Deja la sesión y los ajustes en `~/.grok`. Para borrar eso también:
 
-- [claude-code-termux-native](https://github.com/Thr45hx/claude-code-termux-native) — Claude Code
-- [antigravity-cli-termux-native](https://github.com/Thr45hx/antigravity-cli-termux-native) — Google Antigravity
-- [grok-cli-termux-native](https://github.com/Thr45hx/grok-cli-termux-native) — xAI Grok Build
-- [opencode-termux-native](https://github.com/Thr45hx/opencode-termux-native) — OpenCode
-- [copilot-cli-termux-native](https://github.com/Thr45hx/copilot-cli-termux-native) — GitHub Copilot
+```bash
+rm -rf ~/.grok
+```
 
-## Notes
+## Cómo funciona el truco de 16 bytes
 
-- **AI-assisted:** built and reverse-engineered with AI help — a daily-driver, not a toy. Provided as-is.
-- **Tested on:** Android 17, rooted **Pixel 9 Pro XL** (Tensor G4, aarch64).
-- **Root / no-root:** **No root needed** by default (sdcard byte-patch); rooted users get the pristine binary automatically via a systemless resolv module. Same install either way.
-- **License:** [MIT](./LICENSE).
+El programa tiene escrita, por dentro, esta ruta:
 
----
+```text
+/etc/resolv.conf
+```
 
-Unofficial — not affiliated with xAI. Provided as-is, no warranty.
+Son 16 caracteres. En un móvil sin root, Termux no puede crear ese archivo: `/etc` apunta al sistema, que es de solo lectura.
+
+Esta otra ruta mide **los mismos 16 caracteres**:
+
+```text
+/sdcard/.grokdns
+```
+
+El instalador cambia un texto por el otro, en el mismo sitio, letra por letra. Como miden igual, el resto del programa no se mueve. Es como cambiar una palabra por otra del mismo tamaño: las líneas de debajo siguen donde estaban.
+
+Después escribe `/sdcard/.grokdns` con los servidores DNS. Hoy el archivo queda así:
+
+```text
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+```
+
+A partir de ahí, cuando `grok` necesita un nombre, lee ese archivo. Las conexiones cifradas (HTTPS) ya funcionaban: el programa trae sus propios certificados. Solo había que arreglar el DNS.
+
+Cada vez que arrancas `grok`, el lanzador comprueba el binario y, si hace falta, repite el cambio. Por eso sobrevive a `grok update`.
+
+Si el teléfono tiene root y ya existe un `/etc/resolv.conf` con una línea `nameserver`, el lanzador deja el programa sin tocar y usa esa ruta del sistema.
+
+Dónde queda cada cosa:
+
+| Ruta | Para qué |
+| --- | --- |
+| `~/.grok/versions/` | Copias del programa `grok` |
+| `~/agents/grok/launcher.sh` | Lo que de verdad arranca el comando `grok` |
+| `/sdcard/.grokdns` | Servidores DNS (solo sin root) |
+| `~/.grok` | Sesión y ajustes |
+
+## Licencia
+
+[MIT](./LICENSE). Copyright (c) 2026 Ryan Wylie (Thr45hx).
+
+Proyecto original: [github.com/Thr45hx/grok-cli-termux-native](https://github.com/Thr45hx/grok-cli-termux-native).
