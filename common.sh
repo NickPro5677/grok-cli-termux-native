@@ -412,13 +412,18 @@ patch_grok_binary() {
   return 0
 }
 
+# stable, alpha, and the official installer also allow a suffix such as 1.2.3-rc.1.
+is_grok_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._]+)?$ ]]
+}
+
 list_versions() {
   local versions="$1" f base
   [ -d "$versions" ] || return 0
   for f in "$versions"/*; do
     [ -f "$f" ] || continue
     base="$(basename "$f")"
-    if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if is_grok_version "$base"; then
       printf '%s\n' "$base"
     fi
   done
@@ -433,7 +438,7 @@ current_grok_bin() {
   fi
   if [ -f "$versions/.verified" ]; then
     verified="$(tr -d '[:space:]' < "$versions/.verified")"
-    if [[ "$verified" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -f "$versions/$verified" ]; then
+    if is_grok_version "$verified" && [ -f "$versions/$verified" ]; then
       printf '%s\n' "$versions/$verified"
       return 0
     fi
@@ -499,6 +504,479 @@ print_termux_fix() {
   printf '    termux-change-repo\n'
   printf '    pkg upgrade\n'
   printf '  Then run this installer again.\n'
+}
+
+# True when this path is the Termux launcher (or a shortcut to it).
+is_our_launcher() {
+  local path="$1" real ours agents candidate
+  [ -n "$path" ] || return 1
+  [ -e "$path" ] || [ -L "$path" ] || return 1
+  ours="$(grok_prefix)/bin/grok"
+  if [ "$path" = "$ours" ]; then
+    return 0
+  fi
+  real="$(readlink -f -- "$path" 2>/dev/null || true)"
+  [ -n "$real" ] || return 1
+  for candidate in "$ours" "$(grok_agents_dir)/launcher.sh" "${GROK_SCRIPT_DIR:-}/launcher.sh"; do
+    [ -n "$candidate" ] || continue
+    [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+    agents="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+    if [ -n "$agents" ] && [ "$real" = "$agents" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Prints each grok executable from `type -a`, in PATH order.
+list_grok_paths() {
+  local line path
+  while IFS= read -r line; do
+    case "$line" in
+      "grok is hashed ("*")")
+        path="${line#grok is hashed (}"
+        path="${path%)}"
+        printf '%s\n' "$path"
+        ;;
+      "grok is "/*)
+        path="${line#grok is }"
+        printf '%s\n' "$path"
+        ;;
+    esac
+  done < <(type -a grok 2>/dev/null || true)
+}
+
+path_under_home() {
+  local path="$1" home real
+  home="$(grok_home)"
+  case "$path" in
+    "$home"/*) return 0 ;;
+  esac
+  real="$(readlink -f -- "$path" 2>/dev/null || true)"
+  case "$real" in
+    "$home"/*) return 0 ;;
+  esac
+  return 1
+}
+
+# The official installer prepends ~/.grok/bin. A later copy on PATH does not hide us.
+is_official_path_line() {
+  local line="$1" trimmed dollar='$'
+  trimmed="${line#"${line%%[![:space:]]*}"}"
+  case "$trimmed" in
+    ''|'#'*) return 1 ;;
+  esac
+  # dollar is literal: these are lines as written in the shell rc file.
+  case "$trimmed" in
+    *".grok/bin:${dollar}PATH"*|*".grok/bin:${dollar}{PATH}"*|*fish_add_path*.grok/bin*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+grok_backup_list() {
+  printf '%s/.grok/termux-native-backups.tsv\n' "$(grok_home)"
+}
+
+record_backup() {
+  local orig="$1" backup="$2" list line
+  list="$(grok_backup_list)"
+  mkdir -p -- "$(dirname "$list")" || return 1
+  line="$(printf '%s\t%s' "$orig" "$backup")"
+  if [ -f "$list" ] && grep -F -x -q -- "$line" "$list"; then
+    return 0
+  fi
+  printf '%s\n' "$line" >>"$list"
+}
+
+# Comments out PATH lines that put ~/.grok/bin first. Backs the file up once.
+neutralize_rc_file() {
+  local file="$1" real home tmp line changed backup
+  [ -e "$file" ] || [ -L "$file" ] || return 0
+  home="$(grok_home)"
+  if [ -L "$file" ]; then
+    real="$(readlink -f -- "$file" 2>/dev/null || true)"
+    case "$real" in
+      "$home"/*) file="$real" ;;
+      *)
+        say "WARNING: $1 is a shortcut outside the home folder. It was left as it is."
+        return 0
+        ;;
+    esac
+  fi
+  [ -f "$file" ] || return 0
+  changed=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if is_official_path_line "$line"; then
+      changed=1
+      break
+    fi
+  done <"$file"
+  if [ "$changed" -eq 0 ]; then
+    return 0
+  fi
+  if [ ! -w "$file" ]; then
+    say "WARNING: cannot edit $file. The official grok PATH line is still active."
+    return 1
+  fi
+  backup="${file}.grok-native-bak"
+  if [ ! -e "$backup" ] && [ ! -L "$backup" ]; then
+    if ! cp -p -- "$file" "$backup"; then
+      say "WARNING: could not back up $file."
+      return 1
+    fi
+    record_backup "$file" "$backup" || return 1
+  fi
+  tmp="$(mktemp)" || return 1
+  register_tmp "$tmp"
+  : >"$tmp" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    if is_official_path_line "$line"; then
+      printf '# grok-termux-native: %s\n' "$line" >>"$tmp" || return 1
+    else
+      printf '%s\n' "$line" >>"$tmp" || return 1
+    fi
+  done <"$file"
+  if ! mv -f -- "$tmp" "$file"; then
+    say "WARNING: could not update $file."
+    return 1
+  fi
+  say "Commented the official grok PATH line in $file."
+  say "Backup: $backup"
+  return 0
+}
+
+launcher_link_target() {
+  local ours agents
+  ours="$(grok_prefix)/bin/grok"
+  if [ -e "$ours" ] || [ -L "$ours" ]; then
+    printf '%s\n' "$ours"
+    return 0
+  fi
+  agents="$(grok_agents_dir)/launcher.sh"
+  if [ -f "$agents" ]; then
+    printf '%s\n' "$agents"
+    return 0
+  fi
+  if [ -n "${GROK_SCRIPT_DIR:-}" ] && [ -f "$GROK_SCRIPT_DIR/launcher.sh" ]; then
+    printf '%s\n' "$GROK_SCRIPT_DIR/launcher.sh"
+    return 0
+  fi
+  return 1
+}
+
+# Replaces one shadowed grok under the home folder with a shortcut to our launcher.
+point_at_launcher() {
+  local path="$1" launcher="$2" backup prefix
+  [ -e "$path" ] || [ -L "$path" ] || return 0
+  if is_our_launcher "$path"; then
+    return 0
+  fi
+  prefix="$(grok_prefix)"
+  if [ "$path" = "$prefix/bin/grok" ] || [ "$path" = "$prefix/bin/grok-doctor" ]; then
+    return 0
+  fi
+  if ! path_under_home "$path"; then
+    say "WARNING: $path is earlier on PATH than the Termux launcher. It was left in place."
+    printf '  Fix: mv %s %s.viejo; hash -r\n' "$path" "$path" >&2
+    return 0
+  fi
+  backup="${path}.viejo"
+  if [ ! -w "$(dirname "$path")" ]; then
+    say "WARNING: cannot change $path."
+    printf '  Fix: mv ~/.grok/bin/grok ~/.grok/bin/grok.viejo; hash -r\n' >&2
+    return 1
+  fi
+  if [ ! -e "$backup" ] && [ ! -L "$backup" ]; then
+    if ! mv -f -- "$path" "$backup"; then
+      say "WARNING: could not move $path aside."
+      return 1
+    fi
+    record_backup "$path" "$backup" || return 1
+    say "Backup: $backup"
+  else
+    if ! rm -f -- "$path"; then
+      say "WARNING: could not replace $path."
+      return 1
+    fi
+  fi
+  if ! ln -sfn -- "$launcher" "$path"; then
+    say "WARNING: could not point $path at the Termux launcher."
+    return 1
+  fi
+  say "Pointed $path at the Termux launcher."
+  return 0
+}
+
+# Makes the Termux launcher the grok people actually run. Safe to repeat.
+neutralize_shadowed_grok() {
+  local launcher path rc=0 official
+  if ! launcher="$(launcher_link_target)"; then
+    say "WARNING: the Termux launcher is not installed yet."
+    return 1
+  fi
+  neutralize_rc_file "$(grok_home)/.bashrc" || rc=1
+  neutralize_rc_file "$(grok_home)/.profile" || rc=1
+  neutralize_rc_file "$(grok_home)/.zshrc" || rc=1
+  official="$(grok_home)/.grok/bin/grok"
+  if [ -e "$official" ] || [ -L "$official" ]; then
+    point_at_launcher "$official" "$launcher" || rc=1
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if is_our_launcher "$path"; then
+      break
+    fi
+    point_at_launcher "$path" "$launcher" || rc=1
+  done < <(list_grok_paths)
+  return "$rc"
+}
+
+# So `grok update` restarts the real program, not this launcher.
+prepare_link_for_update() {
+  local real="$1" link
+  link="$(grok_home)/.grok/bin/grok"
+  mkdir -p -- "$(dirname "$link")" || return 1
+  if [ -L "$link" ] && ! is_our_launcher "$link"; then
+    return 0
+  fi
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    if is_our_launcher "$link"; then
+      rm -f -- "$link" || return 1
+    elif [ ! -e "${link}.viejo" ] && [ ! -L "${link}.viejo" ]; then
+      mv -f -- "$link" "${link}.viejo" || return 1
+      record_backup "$link" "${link}.viejo" || return 1
+    else
+      rm -f -- "$link" || return 1
+    fi
+  fi
+  ln -sfn -- "$real" "$link"
+}
+
+read_config_channel() {
+  local cfg="$1" line section="" value
+  [ -f "$cfg" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      \[cli\]*) section="cli" ;;
+      \[*\]) section="" ;;
+    esac
+    [ "$section" = "cli" ] || continue
+    case "$line" in
+      [[:space:]]*channel[[:space:]]*=*) ;;
+      *) continue ;;
+    esac
+    value="${line#*=}"
+    value="$(trim "$value")"
+    value="${value#\"}"
+    value="${value%\"}"
+    value="${value#\'}"
+    value="${value%\'}"
+    case "$value" in
+      stable|alpha|enterprise)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done <"$cfg"
+  return 1
+}
+
+# GROK_CHANNEL, then config.toml, then the channel file, then stable.
+read_grok_channel() {
+  local c cfg
+  if [ -n "${GROK_CHANNEL+x}" ]; then
+    printf '%s\n' "$GROK_CHANNEL"
+    return 0
+  fi
+  cfg="$(grok_home)/.grok/config.toml"
+  if c="$(read_config_channel "$cfg")"; then
+    printf '%s\n' "$c"
+    return 0
+  fi
+  cfg="$(grok_versions_dir)/.channel"
+  if [ -f "$cfg" ]; then
+    c="$(tr -d '[:space:]' <"$cfg")"
+    case "$c" in
+      stable|alpha|enterprise)
+        printf '%s\n' "$c"
+        return 0
+        ;;
+    esac
+  fi
+  printf '%s\n' "stable"
+}
+
+channel_for_invocation() {
+  local channel="$1" arg
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      --alpha) channel="alpha" ;;
+      --stable) channel="stable" ;;
+      --enterprise) channel="enterprise" ;;
+    esac
+  done
+  case "$channel" in
+    stable|alpha|enterprise) ;;
+    *) channel="stable" ;;
+  esac
+  printf '%s\n' "$channel"
+}
+
+save_grok_channel() {
+  local channel="$1" cfg dir tmp
+  case "$channel" in
+    stable|alpha|enterprise) ;;
+    *)
+      err "GROK_CHANNEL must be stable, alpha, or enterprise. Got: $channel"
+      return 1
+      ;;
+  esac
+  dir="$(grok_versions_dir)"
+  mkdir -p -- "$dir" "$(grok_home)/.grok" || return 1
+  printf '%s\n' "$channel" >"$dir/.channel" || return 1
+  cfg="$(grok_home)/.grok/config.toml"
+  tmp="$(mktemp)" || return 1
+  register_tmp "$tmp"
+  if [ -f "$cfg" ]; then
+    awk -v channel="$channel" '
+      BEGIN { saw = 0 }
+      /^\[cli\][[:space:]]*(#.*)?$/ {
+        print
+        print "channel = \"" channel "\""
+        saw = 1
+        in_cli = 1
+        next
+      }
+      /^\[/ { in_cli = 0 }
+      in_cli && /^[[:space:]]*channel[[:space:]]*=/ { next }
+      { print }
+      END {
+        if (!saw) {
+          print ""
+          print "[cli]"
+          print "channel = \"" channel "\""
+        }
+      }
+    ' "$cfg" >"$tmp" || return 1
+  else
+    printf '[cli]\nchannel = "%s"\n' "$channel" >"$tmp" || return 1
+  fi
+  mv -f -- "$tmp" "$cfg" || return 1
+}
+
+# grok update points ~/.grok/bin/grok at a new download. Copy that into versions/.
+adopt_self_update() {
+  local home bin upd base uver dest verified current ver_out
+  home="$(grok_home)"
+  bin="$home/.grok/bin/grok"
+  if [ ! -e "$bin" ] && [ ! -L "$bin" ]; then
+    return 0
+  fi
+  if is_our_launcher "$bin"; then
+    return 0
+  fi
+  upd="$(readlink -f -- "$bin" 2>/dev/null || true)"
+  [ -n "$upd" ] || return 0
+  [ -f "$upd" ] || return 0
+  if is_our_launcher "$upd"; then
+    return 0
+  fi
+  base="$(basename "$upd")"
+  uver=""
+  case "$base" in
+    grok-*-linux-aarch64)
+      uver="${base#grok-}"
+      uver="${uver%-linux-aarch64}"
+      ;;
+    grok-linux-aarch64)
+      if command -v timeout >/dev/null 2>&1; then
+        ver_out="$(timeout -s KILL 20 "$upd" --version 2>/dev/null || true)"
+      else
+        ver_out="$("$upd" --version 2>/dev/null || true)"
+      fi
+      if [[ "$ver_out" =~ ([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._]+)?) ]]; then
+        uver="${BASH_REMATCH[1]}"
+      fi
+      ;;
+    *) return 0 ;;
+  esac
+  if ! is_grok_version "$uver"; then
+    return 0
+  fi
+  mkdir -p -- "$(grok_versions_dir)" || die "Could not create $(grok_versions_dir)."
+  dest="$(grok_versions_dir)/$uver"
+  verified="$(grok_versions_dir)/.verified"
+  if [ ! -f "$dest" ]; then
+    cp -f -- "$upd" "$dest" || die "Could not copy the updated grok program to $dest."
+    chmod 700 "$dest" || die "Could not set permissions on $dest."
+    printf '%s\n' "$uver" >"$verified" || die "Could not write $verified."
+    say "Picked up grok update $uver."
+    return 0
+  fi
+  current=""
+  if [ -f "$verified" ]; then
+    current="$(tr -d '[:space:]' <"$verified")"
+  fi
+  if [ "$current" != "$uver" ]; then
+    printf '%s\n' "$uver" >"$verified" || die "Could not write $verified."
+    say "Switched to grok $uver."
+  fi
+}
+
+check_grok_command() {
+  local cmd
+  if ! cmd="$(command -v grok 2>/dev/null)"; then
+    bad "Command: grok is not on PATH."
+    printf '  Fix: mv ~/.grok/bin/grok ~/.grok/bin/grok.viejo; hash -r\n'
+    printf '  Then run: bash install.sh\n'
+    return 1
+  fi
+  if is_our_launcher "$cmd"; then
+    ok "Command: grok is the Termux launcher ($cmd)."
+    return 0
+  fi
+  bad "Command: grok is $cmd, not the Termux launcher."
+  printf '  That copy has no DNS patch, so grok --doctor says: unexpected argument '\''--doctor'\'' found\n'
+  printf '  Fix: mv ~/.grok/bin/grok ~/.grok/bin/grok.viejo; hash -r\n'
+  printf '  Or close Termux and open it again.\n'
+  return 1
+}
+
+restore_native_backups() {
+  local list line orig backup home f
+  home="$(grok_home)"
+  list="$(grok_backup_list)"
+  if [ -f "$list" ]; then
+    while IFS=$'\t' read -r orig backup || [ -n "${orig:-}" ]; do
+      [ -n "${orig:-}" ] || continue
+      [ -n "${backup:-}" ] || continue
+      if [ -e "$backup" ] || [ -L "$backup" ]; then
+        mkdir -p -- "$(dirname "$orig")" || die "Could not restore $orig."
+        rm -f -- "$orig" || die "Could not restore $orig."
+        mv -f -- "$backup" "$orig" || die "Could not restore $orig."
+        say "Restored $orig."
+      fi
+    done <"$list"
+    rm -f -- "$list" || true
+  fi
+  for f in .bashrc .profile .zshrc; do
+    backup="$home/${f}.grok-native-bak"
+    if [ -e "$backup" ] || [ -L "$backup" ]; then
+      rm -f -- "$home/$f" || die "Could not restore $home/$f."
+      mv -f -- "$backup" "$home/$f" || die "Could not restore $home/$f."
+      say "Restored $home/$f."
+    fi
+  done
+  orig="$home/.grok/bin/grok"
+  backup="$home/.grok/bin/grok.viejo"
+  if [ -e "$backup" ] || [ -L "$backup" ]; then
+    rm -f -- "$orig" || die "Could not restore $orig."
+    mv -f -- "$backup" "$orig" || die "Could not restore $orig."
+    say "Restored $orig."
+  fi
 }
 
 doctor() {
@@ -613,6 +1091,10 @@ doctor() {
       fail=1
       ;;
   esac
+
+  if ! check_grok_command; then
+    fail=1
+  fi
 
   if [ "$fail" -ne 0 ]; then
     say "Some checks failed. Fix the FAIL lines, then run: grok --doctor"

@@ -4,6 +4,8 @@
 # Before grok starts, this checks the DNS file and the 16-byte path inside
 # the program. `grok update` downloads a fresh program that still says
 # /etc/resolv.conf, so the patch is applied again and a backup is kept.
+# The official installer also puts an unpatched grok first on PATH. This
+# launcher puts that shortcut back on our script after an update.
 set -euo pipefail
 
 if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "main" ]; then
@@ -46,54 +48,8 @@ if [ "${1:-}" = "--doctor" ] || [ "${1:-}" = "doctor" ]; then
   exit 0
 fi
 
-# grok's own updater points ~/.grok/bin/grok at a new download and does not
-# update the versions folder this launcher runs. Copy that download across.
-adopt_self_update() {
-  local home bin upd base uver dest verified current
-  home="$(grok_home)"
-  bin="$home/.grok/bin/grok"
-  if [ ! -e "$bin" ] && [ ! -L "$bin" ]; then
-    return 0
-  fi
-  upd=""
-  if [ -L "$bin" ] || [ -e "$bin" ]; then
-    # A missing updater symlink is normal before the first `grok update`.
-    upd="$(readlink -f "$bin" 2>/dev/null || true)"
-  fi
-  [ -n "$upd" ] || return 0
-  base="$(basename "$upd")"
-  case "$base" in
-    grok-*-linux-aarch64) ;;
-    *) return 0 ;;
-  esac
-  uver="${base#grok-}"
-  uver="${uver%-linux-aarch64}"
-  if [[ ! "$uver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    return 0
-  fi
-  if [ ! -f "$upd" ]; then
-    return 0
-  fi
-  mkdir -p -- "$(grok_versions_dir)" || die "Could not create $(grok_versions_dir)."
-  dest="$(grok_versions_dir)/$uver"
-  verified="$(grok_versions_dir)/.verified"
-  if [ ! -f "$dest" ]; then
-    cp -f -- "$upd" "$dest" || die "Could not copy the updated grok program to $dest."
-    chmod 700 "$dest" || die "Could not set permissions on $dest."
-    printf '%s\n' "$uver" >"$verified" || die "Could not write $verified."
-    say "Picked up grok update $uver."
-    return 0
-  fi
-  current=""
-  if [ -f "$verified" ]; then
-    current="$(tr -d '[:space:]' < "$verified")"
-  fi
-  if [ "$current" != "$uver" ]; then
-    printf '%s\n' "$uver" >"$verified" || die "Could not write $verified."
-    say "Switched to grok $uver."
-  fi
-}
-
+# grok update rewrites ~/.grok/bin/grok. Copy that download into versions/
+# before this launcher replaces the shortcut with itself.
 adopt_self_update
 
 bin=""
@@ -124,6 +80,58 @@ if [ "$MODE" = "sdcard" ] && file_contains "$bin" "$RESOLV_NATIVE"; then
   say "The grok program is missing the DNS patch. This happens after 'grok update' replaces the program."
 fi
 
+refuse_launcher_binary() {
+  local real self
+  real="$(readlink -f -- "$1" 2>/dev/null || true)"
+  self="$(readlink -f -- "$SCRIPT_DIR/launcher.sh" 2>/dev/null || true)"
+  if [ -n "$real" ] && [ -n "$self" ] && [ "$real" = "$self" ]; then
+    die "Refusing to start the launcher as if it were the grok program. Run: bash install.sh"
+  fi
+}
+
+refuse_launcher_binary "$bin"
+
 patch_grok_binary "$bin" "$MODE" "$SCRIPT_DIR/grok-dns.py"
+
+# `grok update` swaps ~/.grok/bin/grok and may restart that path. Run it as a
+# child, then put our launcher back and patch the new program. A restart that
+# lands here again must exec the real program, or it would loop.
+if [ "${GROK_UPDATE_WRAPPED:-}" = "1" ]; then
+  # The updater restarted this launcher. Point ~/.grok/bin/grok at the real
+  # program before exec, or the next restart would call this script again.
+  prepare_link_for_update "$bin" || true
+  exec "$bin" "$@" || die "Could not start $bin."
+fi
+
+if [ "${1:-}" = "update" ]; then
+  channel="$(channel_for_invocation "$(read_grok_channel)" "$@")"
+  if ! save_grok_channel "$channel"; then
+    say "WARNING: could not save release channel $channel."
+  fi
+  if ! prepare_link_for_update "$bin"; then
+    say "WARNING: could not prepare ~/.grok/bin/grok for the update."
+  fi
+  set +e
+  GROK_UPDATE_WRAPPED=1 "$bin" "$@"
+  rc=$?
+  set -e
+  adopt_self_update || true
+  if ! bin="$(current_grok_bin)"; then
+    die "No grok program is installed yet. Run: bash install.sh"
+  fi
+  refuse_launcher_binary "$bin"
+  if [ "$MODE" = "sdcard" ] && file_contains "$bin" "$RESOLV_NATIVE"; then
+    say "The grok program is missing the DNS patch. This happens after 'grok update' replaces the program."
+  fi
+  if ! patch_grok_binary "$bin" "$MODE" "$SCRIPT_DIR/grok-dns.py"; then
+    die "Could not patch grok after the update."
+  fi
+  neutralize_shadowed_grok || true
+  say "If grok still runs the wrong program, run: hash -r"
+  say "Or close Termux and open it again."
+  exit "$rc"
+fi
+
+neutralize_shadowed_grok || true
 
 exec "$bin" "$@" || die "Could not start $bin."

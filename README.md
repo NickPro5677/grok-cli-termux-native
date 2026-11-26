@@ -55,7 +55,15 @@ grok --doctor
 - `curl` guarda `install.sh` en la carpeta actual. No lo ejecuta.
 - `less install.sh` muestra el script. Léelo: se ve qué paquetes instala, de dónde baja `grok` y qué escribe (`~/agents/grok`, `~/.grok/versions` y `/sdcard/.grokdns`). `q` sale de `less`.
 - `bash install.sh` instala. Se puede repetir. Si esa versión ya está y arranca, no la vuelve a bajar. Si un paso falla, se detiene y no anuncia que terminó.
-- `grok --doctor` revisa el teléfono (almacenamiento, DNS, el parche y que sea aarch64). El mismo chequeo es el comando `grok-doctor`.
+- `grok --doctor` revisa el teléfono (almacenamiento, DNS, el parche, que el comando `grok` sea el de Termux y que sea aarch64). El mismo chequeo es el comando `grok-doctor`. Si dice `unexpected argument '--doctor'`, mira [docs/PROBLEMAS.md](docs/PROBLEMAS.md): otro `grok` está delante en el PATH.
+
+El canal por defecto es **stable**. Para el canal **alpha** (versiones más nuevas; en noviembre de 2026 stable es 1.0.92 y alpha es 1.0.94):
+
+```bash
+GROK_CHANNEL=alpha bash install.sh
+```
+
+`grok update` sigue el canal que elegiste.
 
 Si `pkg` o `curl` muestran un error, para y mira [docs/PROBLEMAS.md](docs/PROBLEMAS.md). Si la descarga falla, no ejecutes el script: espera y vuelve a bajarlo.
 
@@ -112,7 +120,9 @@ Dentro de grok, `Ctrl+U`. Desde la terminal:
 grok update
 ```
 
-La actualización baja un binario nuevo. Ese archivo vuelve a traer la ruta original `/etc/resolv.conf`. Ciérralo y ábrelo otra vez con `grok`. El lanzador (`~/agents/grok/launcher.sh`) adopta la versión nueva y **vuelve a aplicar el cambio de 16 bytes**. Antes de tocar el programa guarda una copia `.bak` a su lado, por ejemplo `~/.grok/versions/1.2.3.bak`, con el archivo de antes del parche. Si `/sdcard/.grokdns` desapareció o no tiene un `nameserver` válido, también lo crea de nuevo.
+La actualización baja un binario nuevo. Ese archivo vuelve a traer la ruta original `/etc/resolv.conf`. Además, el actualizador vuelve a dejar el programa crudo en `~/.grok/bin/grok`. Ciérralo y ábrelo otra vez con `grok`. El lanzador (`~/agents/grok/launcher.sh`) adopta la versión nueva, **vuelve a aplicar el cambio de 16 bytes** y deja otra vez el enlace de `~/.grok/bin/grok` apuntando al lanzador. Antes de tocar el programa guarda una copia `.bak` a su lado, por ejemplo `~/.grok/versions/1.2.3.bak`, con el archivo de antes del parche. Si `/sdcard/.grokdns` desapareció o no tiene un `nameserver` válido, también lo crea de nuevo.
+
+Si en esa misma ventana `grok` sigue siendo el programa viejo, ejecuta `hash -r` o cierra Termux y ábrelo de nuevo.
 
 ## Desinstalar
 
@@ -123,7 +133,7 @@ less ~/agents/grok/uninstall.sh
 bash ~/agents/grok/uninstall.sh
 ```
 
-Quita los comandos `grok` y `grok-doctor`, la carpeta `~/agents/grok`, las versiones en `~/.grok/versions` (también los `.bak`) y el archivo `/sdcard/.grokdns`.
+Quita los comandos `grok` y `grok-doctor`, la carpeta `~/agents/grok`, las versiones en `~/.grok/versions` (también los `.bak`) y el archivo `/sdcard/.grokdns`. Si el instalador había apartado el `grok` oficial (`~/.grok/bin/grok.viejo`) o había comentado el PATH en `~/.bashrc`, `~/.profile` o `~/.zshrc`, desinstalar devuelve esas copias.
 
 Deja la sesión y los ajustes en `~/.grok`. Para borrar eso también:
 
@@ -177,9 +187,11 @@ Dónde queda cada cosa:
 | `~/.grok/versions/` | Copias del programa `grok` |
 | `~/.grok/versions/<versión>.bak` | Copia de antes del parche DNS |
 | `~/agents/grok/launcher.sh` | Lo que de verdad arranca el comando `grok` |
+| `$PREFIX/bin/grok` | Enlace a ese lanzador. En Termux es `/data/data/com.termux/files/usr/bin/grok` |
+| `~/.grok/bin/grok` | El instalador oficial lo pone delante del PATH. Aquí queda un enlace al lanzador. La copia anterior está en `~/.grok/bin/grok.viejo` |
 | `~/agents/grok/grok-doctor.sh` | El comando `grok-doctor` |
 | `/sdcard/.grokdns` | Servidores DNS (solo sin root) |
-| `~/.grok` | Sesión y ajustes |
+| `~/.grok` | Sesión, canal (`stable` o `alpha`) y ajustes |
 
 ## Licencia
 

@@ -47,6 +47,7 @@ fi
 # Doctor checklist, through every entry point.
 home="$tmp/home"
 mkdir -p "$home/.grok/versions" "$GROK_PREFIX/bin"
+ln -sfn "$ROOT/launcher.sh" "$GROK_PREFIX/bin/grok"
 dns="$tmp/dns"
 printf 'nameserver 127.0.0.1\n' >"$dns"
 cat >"$home/.grok/versions/1.2.3" << 'EOF'
@@ -59,6 +60,7 @@ run_doctor() {
     PREFIX="$GROK_PREFIX" GROK_PREFIX="$GROK_PREFIX" \
     GROK_DNS_FILE="$dns" GROK_SYSTEM_RESOLV="$tmp/no-such-resolv" \
     TERMUX_APK_RELEASE="F_DROID" \
+    PATH="$GROK_PREFIX/bin:/usr/bin:/bin" \
     bash "$@"
 }
 
@@ -80,6 +82,7 @@ expect_doctor() {
   assert_contains "$out" "Binary:"
   assert_contains "$out" "Arch:"
   assert_contains "$out" "DNS patch is present"
+  assert_contains "$out" "Termux launcher"
 }
 
 expect_doctor "$ROOT/install.sh" --doctor
