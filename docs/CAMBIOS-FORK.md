@@ -4,22 +4,17 @@ Este repositorio es un fork de [Thr45hx/grok-cli-termux-native](https://github.c
 
 La idea es la misma que en el original: ejecutar el `grok` oficial de xAI en Termux (Android aarch64, sin root) cambiando una ruta de 16 bytes, de `/etc/resolv.conf` a `/sdcard/.grokdns`.
 
-En `main`, los scripts siguen siendo los del proyecto original. Los arreglos de abajo van en **otro pull request**, el de los scripts. Hasta que ese PR se fusione, cada uno está marcado **en PR**. Esta documentación no modifica los `.sh`.
+Los arreglos de los scripts ya están en `main`. Entraron en el pull request **#2** (merge `a9ffb93`). En la tabla figuran como **hecho**.
 
-| Cambio | Estado | Qué hará |
+| Cambio | Estado | Qué hace |
 | --- | --- | --- |
-| Parar si no hay permiso de almacenamiento | en PR | Si no puede escribir `/sdcard/.grokdns`, el instalador se detiene y lo dice. No termina con un «instalado» cuando el DNS no se pudo crear. |
-| Mostrar los errores | en PR | Un fallo de red, de `pkg` o de permisos se ve en la terminal. El instalador se detiene con ese texto. |
-| Instalar las dependencias | en PR | El instalador instala con `pkg` lo que el script necesita (python, curl y las herramientas con las que comprueba el binario) y se detiene si `pkg` no puede. |
-| DNS configurable, y el del teléfono si no eliges otro | en PR | Variable `GROK_DNS`. Ejemplo: `GROK_DNS="1.1.1.1 8.8.8.8"`. Si no la defines, el archivo usa el DNS que ya usa el teléfono. Esos servidores se escriben en `/sdcard/.grokdns`. |
-| El lanzador comprueba el DNS y vuelve a parchear tras actualizar | en PR | Al abrir `grok`, el lanzador de hoy ya vuelve a poner la ruta de 16 bytes. Este cambio lo refuerza: revisa que `/sdcard/.grokdns` sea válido, tiene en cuenta `GROK_DNS` y repite el parche cuando `grok update` restaura `/etc/resolv.conf`. |
-| Doctor | en PR | `grok --doctor`, si está disponible, revisa Termux, la arquitectura, el permiso de almacenamiento, `/sdcard/.grokdns` y el parche, y dice qué falla. |
-| CI con shellcheck | en PR | GitHub revisa los scripts con shellcheck en cada cambio, para cazar errores de bash antes de fusionar. |
+| Parar si no hay permiso de almacenamiento | hecho (PR #2) | Si no puede escribir `/sdcard/.grokdns`, el instalador se detiene con un error y pide `termux-setup-storage`. No dice que grok quedó instalado. |
+| Mostrar los errores | hecho (PR #2) | Un fallo de red, de `pkg` o de permisos se ve en la terminal. El instalador se detiene con ese texto y no anuncia el éxito. |
+| Instalar las dependencias | hecho (PR #2) | El instalador ejecuta `pkg install -y python curl file coreutils` y se detiene si `pkg` no puede. Después comprueba que existan `python3`, `curl`, `file`, `timeout` y `sort`. |
+| DNS configurable, y el del teléfono si no eliges otro | hecho (PR #2) | Variable `GROK_DNS`, una lista de direcciones separadas por espacios. Ejemplo: `GROK_DNS="1.1.1.1 8.8.8.8" bash install.sh`. Si no la defines, usa el DNS del teléfono (`net.dns1` y `net.dns2`). Si el teléfono no tiene uno, escribe `1.1.1.1` y `8.8.8.8` en `/sdcard/.grokdns`. Un archivo que ya tiene un `nameserver` válido se conserva, salvo que definas `GROK_DNS`. |
+| El lanzador comprueba el DNS y vuelve a parchear tras actualizar | hecho (PR #2) | Al abrir `grok`, el lanzador revisa `/sdcard/.grokdns` y vuelve a cambiar los 16 bytes si `grok update` restauró `/etc/resolv.conf`. Antes de parchear guarda una copia del mismo tamaño en `~/.grok/versions/<versión>.bak`. |
+| Doctor | hecho (PR #2) | Existen `grok --doctor` y el comando `grok-doctor`. También vale `bash install.sh --doctor`. Revisan el origen de Termux, el permiso de almacenamiento, el archivo DNS, si `api.x.ai` resuelve, el parche del binario y que el móvil sea aarch64. |
+| CI con shellcheck | hecho (PR #2) | GitHub Actions (`.github/workflows/ci.yml`) pasa shellcheck por los scripts y corre las pruebas en `tests/`. |
+| Repetir el instalador | hecho (PR #2) | `bash install.sh` se puede ejecutar otra vez. Si esa versión ya está y arranca, no la vuelve a bajar. Una descarga a medias no sustituye a un grok que ya funcionaba. |
 
-Cuando uno de esos cambios entre en `main`, esta tabla pasa de **en PR** a **en main**.
-
-Hoy, sin esperar a ese PR, ya puedes:
-
-- instalar desde este fork siguiendo el [README](../README.md) (descargar los archivos, leer `install.sh`, luego `bash install.sh`);
-- abrir `grok` después de cada `grok update`, para que el lanzador actual vuelva a aplicar la ruta de 16 bytes;
-- cambiar los DNS a mano en `/sdcard/.grokdns` si una red bloquea `8.8.8.8` (ver [PROBLEMAS.md](PROBLEMAS.md)).
+La guía de instalación está en el [README](../README.md). Si algo falla, [PROBLEMAS.md](PROBLEMAS.md).
