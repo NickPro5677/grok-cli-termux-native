@@ -4,6 +4,11 @@ Cambios visibles de este fork. El formato se parece a [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Corregido
+
+- El instalador oficial de xAI y `grok update` dejan un `grok` sin el parche DNS en `~/.grok/bin` y ponen esa carpeta delante de `$PREFIX/bin`. El comando que arranca no es nuestro lanzador, así que `grok --doctor` responde `unexpected argument '--doctor'`. El instalador y el lanzador apartan ese archivo (`grok.viejo`), lo sustituyen por un enlace al lanzador y comentan la línea de PATH en `~/.bashrc`, `~/.profile` y `~/.zshrc`. Tras instalar o actualizar, si hace falta: `hash -r`, o cierra Termux y ábrelo otra vez. `uninstall.sh` restaura las copias. `grok --doctor` falla si otro `grok` sigue delante, e indica el arreglo `mv ~/.grok/bin/grok ~/.grok/bin/grok.viejo; hash -r`.
+- `GROK_CHANNEL=alpha bash install.sh` instala el canal alpha (en noviembre de 2026, stable es 1.0.92 y alpha es 1.0.94). `grok update` sigue el canal elegido. `--stable` o `--alpha` en ese comando lo cambian.
+
 ### Cambiado
 
 - La instalación del README baja solo `install.sh`. El script descarga de `main`, si faltan, `common.sh`, `launcher.sh`, `grok-dns.py`, `grok-doctor.sh` y `uninstall.sh`.

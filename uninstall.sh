@@ -42,6 +42,8 @@ source "$SCRIPT_DIR/common.sh"
 prefix="$(grok_prefix)"
 home="$(grok_home)"
 
+restore_native_backups
+
 say "Removing the grok commands…"
 rm -f -- "$prefix/bin/grok" "$prefix/bin/grok-doctor" || die "Could not remove the grok commands from $prefix/bin."
 

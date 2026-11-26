@@ -255,7 +255,15 @@ install_commands() {
 }
 
 install_main() {
-  local version="${1:-}" dest mode final tmp file_out need_download
+  local version="${1:-}" dest mode final tmp file_out need_download bin
+  CHANNEL="$(read_grok_channel)"
+  case "$CHANNEL" in
+    stable|alpha|enterprise) ;;
+    *)
+      die "GROK_CHANNEL must be stable, alpha, or enterprise. Got: $CHANNEL"
+      ;;
+  esac
+
   check_environment
 
   if termux_is_old; then
@@ -296,7 +304,7 @@ install_main() {
     fi
   fi
   version="$(printf '%s' "$version" | tr -d '[:space:]')"
-  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if ! is_grok_version "$version"; then
     die "The version '$version' does not look right. Expected something like 1.2.3."
   fi
   say "Version: $version"
@@ -357,13 +365,36 @@ install_main() {
   printf '%s\n' "$version" >"$(grok_versions_dir)/.verified" || die "Could not write $(grok_versions_dir)/.verified."
   prune_old_versions "$(grok_versions_dir)" "$version"
   install_commands
+  # An official install may already have a newer download at ~/.grok/bin/grok.
+  adopt_self_update
+  if ! bin="$(current_grok_bin)"; then
+    die "No grok program is installed yet. Run: bash install.sh"
+  fi
+  if ! patch_grok_binary "$bin" "$mode" "$SCRIPT_DIR/grok-dns.py"; then
+    die "Could not patch grok. Nothing was installed."
+  fi
+  if ! verify_mode "$bin" "$mode"; then
+    die "grok was not patched correctly. Run bash install.sh again."
+  fi
+  version="$(basename "$bin")"
+  printf '%s\n' "$version" >"$(grok_versions_dir)/.verified" || die "Could not write $(grok_versions_dir)/.verified."
+  prune_old_versions "$(grok_versions_dir)" "$version"
+  if ! save_grok_channel "$CHANNEL"; then
+    die "Could not save the release channel ($CHANNEL)."
+  fi
+  if ! neutralize_shadowed_grok; then
+    die "Could not make the Termux grok command win. Fix: mv ~/.grok/bin/grok ~/.grok/bin/grok.viejo; hash -r"
+  fi
 
   say "Installed grok $version."
+  say "Release channel: $CHANNEL."
   say "Run: grok --doctor"
   say "Then try: grok -p \"hello from Termux\""
   say "To sign in, run grok, or set XAI_API_KEY to your key."
   say "To update later, press Ctrl+U inside grok, or run: grok update"
   say "After an update, start grok again. The DNS patch is applied again if it is needed."
+  say "If grok still runs the wrong program, run: hash -r"
+  say "Or close Termux and open it again."
 }
 
 case "${1:-}" in
@@ -381,6 +412,9 @@ Before you start, run:
 
 To choose DNS servers (optional):
   GROK_DNS="1.1.1.1 8.8.8.8" bash install.sh
+
+To choose the release channel (stable is the default, alpha is newer):
+  GROK_CHANNEL=alpha bash install.sh
 
 If this phone already has a valid /sdcard/.grokdns file, it is left as it is
 unless you set GROK_DNS.
